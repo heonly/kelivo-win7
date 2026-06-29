@@ -21,11 +21,7 @@ on:
         required: true
         default: "c8c9ff37"
   push:
-    paths:
-      - "engine_patches/**"
-      - "windows_overrides/**"
-      - "dart_overrides/**"
-      - ".github/workflows/flutter-engine-windows-x64-release-build.yml"
+    branches: [main]
   schedule:
     - cron: "0 3 * * 1"
 
