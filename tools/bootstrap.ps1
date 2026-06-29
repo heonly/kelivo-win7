@@ -29,8 +29,6 @@
 
 param(
     [switch]$SkipBuild = $false,
-    [string]$EngineBranch = "3.44.1",
-    [string]$DartBranch = "dart-3.12.1",
     [string]$KelivoRef = "c8c9ff37"
 )
 
@@ -42,7 +40,7 @@ Write-Host "================================================" -ForegroundColor C
 Write-Host "  Kelivo Win7 Bootstrap v1.0" -ForegroundColor Cyan
 Write-Host "================================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Target: Flutter $EngineBranch / Dart $DartBranch"
+Write-Host "Target: Flutter engine commit c416acfeb8126e097f758c664aaa3da929e27da0 (3.44.1)"
 Write-Host "Kelivo: $KelivoRef"
 Write-Host "Engine patches: $(Join-Path $repoRoot 'engine_patches')"
 Write-Host ""
@@ -132,14 +130,12 @@ Run-Step -Name "Step 3: Fetch Flutter Engine $EngineBranch + Dart $DartBranch" -
 
         Write-Host "  Checking out branches..."
         Set-Location "$engineDir\src\flutter"
-        git fetch --tags origin 2>&1 | Out-Null
-        git checkout $EngineBranch
-        Write-Host "  Flutter: $(git describe --tags)"
+        # Flutter 3.44.1 engine commit (from bin/internal/engine.version)
+        git fetch --depth 1 origin c416acfeb8126e097f758c664aaa3da929e27da0 2>&1 | Out-Null
+        git checkout c416acfeb8126e097f758c664aaa3da929e27da0
+        Write-Host "  Flutter engine: $(git rev-parse HEAD | ForEach-Object { $_.Substring(0,12) })"
 
-        Set-Location "$engineDir\src\dart"
-        git fetch --tags origin 2>&1 | Out-Null
-        git checkout $DartBranch
-        Write-Host "  Dart: $(git describe --tags)"
+        # Dart SDK is pinned by gclient via engine DEPS; no manual checkout needed.
 
         Set-Location "$engineDir\src"
         gclient sync --with_branch_heads --with_tags -D --jobs=4 2>&1 | ForEach-Object { Write-Host "    $_" }

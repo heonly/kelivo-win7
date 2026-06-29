@@ -18,14 +18,6 @@ name: flutter-engine-win7-x64
 on:
   workflow_dispatch:
     inputs:
-      flutter_ref:
-        description: "Flutter engine ref/tag to build"
-        required: true
-        default: "3.44.1"
-      dart_ref:
-        description: "Dart SDK ref/tag to build"
-        required: true
-        default: "dart-3.12.1"
       kelivo_ref:
         description: "Kelivo commit/ref to build"
         required: true
@@ -40,11 +32,10 @@ on:
     - cron: "0 3 * * 1"
 
 env:
-  FLUTTER_REF: ${{ github.event.inputs.flutter_ref || '3.44.1' }}
-  DART_REF: ${{ github.event.inputs.dart_ref || 'dart-3.12.1' }}
   KELIVO_REF: ${{ github.event.inputs.kelivo_ref || 'c8c9ff37' }}
   DEPOT_TOOLS_PATH: C:\depot_tools
   ENGINE_SRC: C:\engine\src
+  ENGINE_COMMIT: c416acfeb8126e097f758c664aaa3da929e27da0
   ARTIFACT_NAME: flutter-engine-win7-x64
 
 jobs:
@@ -68,14 +59,13 @@ jobs:
         run: |
           mkdir C:\engine -Force
           cd C:\engine
-          # fetch --no-history --nohooks flutter  (takes ~15 min)
+          # fetch --no-history --nohooks flutter (takes ~15 min)
           fetch --no-history --nohooks flutter
           cd src\flutter
-          git fetch --tags origin
-          git checkout "$env:FLUTTER_REF"
-          cd ..\dart
-          git fetch --tags origin
-          git checkout "$env:DART_REF"
+          # Flutter 3.44.1 engine commit (from bin/internal/engine.version)
+          # Use the specific commit hash instead of tag (engine repo tags differ)
+          git fetch --depth 1 origin "$env:ENGINE_COMMIT"
+          git checkout "$env:ENGINE_COMMIT"
           cd ..
           gclient sync --with_branch_heads --with_tags -D --jobs=4
           gclient runhooks
