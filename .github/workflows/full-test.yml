@@ -1,0 +1,20 @@
+name: Flutter Engine Win7 Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      kelivo_ref:
+        description: "Kelivo commit/ref to build"
+        required: true
+        default: "c8c9ff37"
+  push:
+    branches: [main]
+
+env:
+  KELIVO_REF: ${{ github.event.inputs.kelivo_ref || 'c8c9ff37' }}
+
+jobs:
+  test-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Trigger received"
