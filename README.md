@@ -19,7 +19,8 @@ kelivo-win7/
 ├── dart_overrides/             — Dart-level dependency overrides
 ├── tools/                      — Automation scripts
 │   ├── apply_patches.py        — Apply/reverse patch series
-│   └── audit_engine.ps1        — Win10+ API scanner
+│   ├── audit_engine.ps1        — Win10+ API scanner
+│   └── bootstrap.ps1           — Full automatic setup on a fresh build machine
 ├── release/                    — Release packaging
 │   ├── scripts/
 │   │   ├── install_prereq.bat  — KB2670838 + VC++ auto-installer
@@ -31,12 +32,27 @@ kelivo-win7/
 
 ## Quick Start
 
-### Prerequisites
+### Option A: Full automatic bootstrap (recommended)
 
-- **Build machine**: Windows with Visual Studio 2022, 16 GB+ RAM, 80 GB+ free disk
-- **Test machine**: Windows 7 SP1 x64 (VM or real HW), KB2670838 installed
+On a **fresh Windows machine with VS2022 and 80 GB+ free disk**:
 
-### Build the Engine (Stage 2)
+```powershell
+# Copy the kelivo-win7/ folder to the build machine, then:
+cd kelivo-win7
+powershell -ExecutionPolicy Bypass -File tools\bootstrap.ps1
+```
+
+This script handles: VS2022 detection/install → depot_tools → engine fetch → patch apply → engine build → Flutter config → Kelivo clone → Kelivo build.  
+Takes ~4-6 hours total on a modern machine.
+
+### Option B: CI pipeline (GitHub Actions)
+
+Push this repo to GitHub. The workflow at `.github/workflows/flutter-engine-windows-x64-release-build.yml` will:
+1. Spin up a `windows-2022` runner automatically
+2. Build the patched engine
+3. Upload `flutter_windows.dll` as artifact
+
+### Option C: Manual step-by-step
 
 ```bash
 # 1. Fetch engine source
@@ -56,23 +72,11 @@ ninja -C out/windows_release_x64 flutter_windows.dll
 
 # 4. Point Flutter to local engine
 flutter config --local-engine-src-path "$PWD/src" --local-engine windows_release_x64
-```
 
-### Build Kelivo (Stage 4)
-
-```bash
-# 1. Clone Kelivo
-git clone git@github.com:Chevey339/kelivo.git
-cd kelivo
-
-# 2. Apply windows_overrides
-cp -r ../kelivo-win7/windows_overrides/* windows/runner/
-# Review and merge if upstream has changed
-
-# 3. Apply manifest changes
-cp ../kelivo-win7/windows_overrides/runner.exe.manifest windows/runner/
-
-# 4. Build
+# 5. Build Kelivo
+cd /path/to/kelivo
+cp /path/to/kelivo-win7/windows_overrides/* windows/runner/
+cp /path/to/kelivo-win7/dart_overrides/pubspec.win7.yaml ./
 flutter pub get
 flutter build windows --release
 ```
