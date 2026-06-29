@@ -11,7 +11,7 @@
 #   4. Git config: create .gitconfig before depot_tools operations
 # =====================================================
 
-name: flutter-engine-win7-x64
+name: Flutter Engine Win7 Build
 
 on:
   workflow_dispatch:
