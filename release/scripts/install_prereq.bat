@@ -1,1 +1,95 @@
-@echo off chcp 65001 >nul title Kelivo Win7 鍓嶇疆渚濊禆瀹夎  echo ======================================== echo   Kelivo Win7 鍓嶇疆渚濊禆妫€娴嬩笌瀹夎 echo ======================================== echo.  setlocal enabledelayedexpansion  REM --- 妫€娴嬫搷浣滅郴缁熺増鏈?--- ver | findstr "6.1" >nul if errorlevel 1 (     echo [淇℃伅] 褰撳墠绯荤粺涓嶆槸 Windows 7锛屾棤闇€瀹夎 Win7 鏇存柊銆?    goto check_vc ) echo [淇℃伅] 妫€娴嬪埌 Windows 7 SP1  REM --- 妫€鏌?KB2670838 --- echo. echo [姝ラ 1/3] 妫€鏌?KB2670838 骞冲彴鏇存柊... dism /online /get-packages 2>nul | findstr "KB2670838" >nul if errorlevel 1 (     echo [闇€瑕乚 KB2670838 骞冲彴鏇存柊缂哄け锛?    echo.     echo 璇ユ洿鏂颁负 Flutter/ANGLE 娓叉煋鎻愪緵 D3D11.1 鏀寔銆?    echo 璇蜂粠浠ヤ笅鍦板潃涓嬭浇鍚庢墜鍔ㄥ畨瑁咃細     echo   https://www.catalog.update.microsoft.com/Search.aspx?q=KB2670838     echo.     echo 鎴栧湪鏈剼鏈悓鐩綍鐨?prerequisite 鏂囦欢澶逛腑鏌ユ壘绂荤嚎鍖呫€?    if exist "prerequisite\KB2670838-x64.msu" (         echo [瀹夎] 鍙戠幇鏈湴绂荤嚎鍖咃紝姝ｅ湪瀹夎...         wusa.exe "prerequisite\KB2670838-x64.msu" /quiet /norestart         set PLATFORM_UPDATE_INSTALLED=1     ) else if exist "..\files\prerequisite\KB2670838-x64.msu" (         echo [瀹夎] 鍙戠幇鏋勫缓鐩綍绂荤嚎鍖咃紝姝ｅ湪瀹夎...         wusa.exe "..\files\prerequisite\KB2670838-x64.msu" /quiet /norestart         set PLATFORM_UPDATE_INSTALLED=1     ) else (         echo [璺宠繃] 鏈壘鍒版湰鍦扮绾垮寘锛岃鎵嬪姩瀹夎鍚庡啀杩愯 Kelivo銆?        set PLATFORM_UPDATE_INSTALLED=0     ) ) else (     echo [OK] KB2670838 宸插畨瑁?)  REM --- 妫€鏌?VC++ Redistributable --- :check_vc echo. echo [姝ラ 2/3] 妫€鏌?Visual C++ Redistributable... reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version >nul 2>&1 if errorlevel 1 (     echo [闇€瑕乚 VC++ 2015-2022 Redistributable (x64) 缂哄け锛?    if exist "prerequisite\vcredist_x64.exe" (         echo [瀹夎] 姝ｅ湪瀹夎 VC++ Redistributable...         "prerequisite\vcredist_x64.exe" /install /quiet /norestart     ) else if exist "..\files\vcredist_x64.exe" (         echo [瀹夎] 鍙戠幇鏋勫缓鐩綍瀹夎鍖咃紝姝ｅ湪瀹夎...         "..\files\vcredist_x64.exe" /install /quiet /norestart     ) else (         echo [璺宠繃] 鏈壘鍒?vcredist_x64.exe銆?        echo   璇蜂粠 https://aka.ms/vs/17/release/vc_redist.x64.exe 涓嬭浇瀹夎銆?    ) ) else (     for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version') do set VC_VER=%%a     echo [OK] VC++ Redistributable 宸插畨瑁?(鐗堟湰 %VC_VER%) )  REM --- 妫€娴?.NET Framework 4.x --- echo. echo [姝ラ 3/3] 妫€鏌?.NET Framework 4.x... reg query "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" /v Release >nul 2>&1 if errorlevel 1 (     echo [鍙€塢 .NET Framework 4.x 鏈畨瑁咃紙鏌愪簺鍔熻兘鍙兘闇€瑕侊級 ) else (     for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" /v Release') do set DOTNET_VER=%%a     echo [OK] .NET Framework 4.x 宸插畨瑁?(Release=%DOTNET_VER%) )  REM --- 鏈€缁堟姤鍛?--- echo. echo ======================================== echo   妫€娴嬪畬鎴?echo ======================================== echo. echo 濡傛灉浠ヤ笂姝ラ鍏ㄩ儴閫氳繃锛屼綘鐜板湪鍙互杩愯 kelivo.exe 浜嗭紒 echo. echo 鎸変换鎰忛敭鍚姩 Kelivo... pause >nul  if exist "kelivo.exe" (     start "" kelivo.exe ) else if exist "kelivo.exe" (     start "" kelivo.exe ) else (     echo [璀﹀憡] 鏈壘鍒?kelivo.exe锛岃纭繚鏈剼鏈綅浜庡彂甯冪洰褰曚腑銆?    echo 鍙戝竷鐩綍缁撴瀯搴斾负锛?    echo   kelivo-win7-x64/     echo   鈹溾攢鈹€ install_prereq.bat     echo   鈹溾攢鈹€ kelivo.exe     echo   鈹溾攢鈹€ flutter_windows.dll     echo   鈹斺攢鈹€ ...     pause )  endlocal
+@echo off
+chcp 65001 >nul
+title Kelivo Win7 鍓嶇疆渚濊禆瀹夎
+
+echo ========================================
+echo   Kelivo Win7 鍓嶇疆渚濊禆妫€娴嬩笌瀹夎
+echo ========================================
+echo.
+
+setlocal enabledelayedexpansion
+
+REM --- 妫€娴嬫搷浣滅郴缁熺増鏈?---
+ver | findstr "6.1" >nul
+if errorlevel 1 (
+    echo [淇℃伅] 褰撳墠绯荤粺涓嶆槸 Windows 7锛屾棤闇€瀹夎 Win7 鏇存柊銆?    goto check_vc
+)
+echo [淇℃伅] 妫€娴嬪埌 Windows 7 SP1
+
+REM --- 妫€鏌?KB2670838 ---
+echo.
+echo [姝ラ 1/3] 妫€鏌?KB2670838 骞冲彴鏇存柊...
+dism /online /get-packages 2>nul | findstr "KB2670838" >nul
+if errorlevel 1 (
+    echo [闇€瑕乚 KB2670838 骞冲彴鏇存柊缂哄け锛?    echo.
+    echo 璇ユ洿鏂颁负 Flutter/ANGLE 娓叉煋鎻愪緵 D3D11.1 鏀寔銆?    echo 璇蜂粠浠ヤ笅鍦板潃涓嬭浇鍚庢墜鍔ㄥ畨瑁咃細
+    echo   https://www.catalog.update.microsoft.com/Search.aspx?q=KB2670838
+    echo.
+    echo 鎴栧湪鏈剼鏈悓鐩綍鐨?prerequisite 鏂囦欢澶逛腑鏌ユ壘绂荤嚎鍖呫€?    if exist "prerequisite\KB2670838-x64.msu" (
+        echo [瀹夎] 鍙戠幇鏈湴绂荤嚎鍖咃紝姝ｅ湪瀹夎...
+        wusa.exe "prerequisite\KB2670838-x64.msu" /quiet /norestart
+        set PLATFORM_UPDATE_INSTALLED=1
+    ) else if exist "..\files\prerequisite\KB2670838-x64.msu" (
+        echo [瀹夎] 鍙戠幇鏋勫缓鐩綍绂荤嚎鍖咃紝姝ｅ湪瀹夎...
+        wusa.exe "..\files\prerequisite\KB2670838-x64.msu" /quiet /norestart
+        set PLATFORM_UPDATE_INSTALLED=1
+    ) else (
+        echo [璺宠繃] 鏈壘鍒版湰鍦扮绾垮寘锛岃鎵嬪姩瀹夎鍚庡啀杩愯 Kelivo銆?        set PLATFORM_UPDATE_INSTALLED=0
+    )
+) else (
+    echo [OK] KB2670838 宸插畨瑁?)
+
+REM --- 妫€鏌?VC++ Redistributable ---
+:check_vc
+echo.
+echo [姝ラ 2/3] 妫€鏌?Visual C++ Redistributable...
+reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version >nul 2>&1
+if errorlevel 1 (
+    echo [闇€瑕乚 VC++ 2015-2022 Redistributable (x64) 缂哄け锛?    if exist "prerequisite\vcredist_x64.exe" (
+        echo [瀹夎] 姝ｅ湪瀹夎 VC++ Redistributable...
+        "prerequisite\vcredist_x64.exe" /install /quiet /norestart
+    ) else if exist "..\files\vcredist_x64.exe" (
+        echo [瀹夎] 鍙戠幇鏋勫缓鐩綍瀹夎鍖咃紝姝ｅ湪瀹夎...
+        "..\files\vcredist_x64.exe" /install /quiet /norestart
+    ) else (
+        echo [璺宠繃] 鏈壘鍒?vcredist_x64.exe銆?        echo   璇蜂粠 https://aka.ms/vs/17/release/vc_redist.x64.exe 涓嬭浇瀹夎銆?    )
+) else (
+    for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64" /v Version') do set VC_VER=%%a
+    echo [OK] VC++ Redistributable 宸插畨瑁?(鐗堟湰 %VC_VER%)
+)
+
+REM --- 妫€娴?.NET Framework 4.x ---
+echo.
+echo [姝ラ 3/3] 妫€鏌?.NET Framework 4.x...
+reg query "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" /v Release >nul 2>&1
+if errorlevel 1 (
+    echo [鍙€塢 .NET Framework 4.x 鏈畨瑁咃紙鏌愪簺鍔熻兘鍙兘闇€瑕侊級
+) else (
+    for /f "tokens=3" %%a in ('reg query "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" /v Release') do set DOTNET_VER=%%a
+    echo [OK] .NET Framework 4.x 宸插畨瑁?(Release=%DOTNET_VER%)
+)
+
+REM --- 鏈€缁堟姤鍛?---
+echo.
+echo ========================================
+echo   妫€娴嬪畬鎴?echo ========================================
+echo.
+echo 濡傛灉浠ヤ笂姝ラ鍏ㄩ儴閫氳繃锛屼綘鐜板湪鍙互杩愯 kelivo.exe 浜嗭紒
+echo.
+echo 鎸変换鎰忛敭鍚姩 Kelivo...
+pause >nul
+
+if exist "kelivo.exe" (
+    start "" kelivo.exe
+) else if exist "kelivo.exe" (
+    start "" kelivo.exe
+) else (
+    echo [璀﹀憡] 鏈壘鍒?kelivo.exe锛岃纭繚鏈剼鏈綅浜庡彂甯冪洰褰曚腑銆?    echo 鍙戝竷鐩綍缁撴瀯搴斾负锛?    echo   kelivo-win7-x64/
+    echo   鈹溾攢鈹€ install_prereq.bat
+    echo   鈹溾攢鈹€ kelivo.exe
+    echo   鈹溾攢鈹€ flutter_windows.dll
+    echo   鈹斺攢鈹€ ...
+    pause
+)
+
+endlocal

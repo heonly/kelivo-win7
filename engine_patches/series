@@ -1,1 +1,19 @@
-# engine_patches/series # Patch application order for Flutter 3.44.1 / Dart 3.12.1 Win7 support # # Format: <repo_tag>:<patch_filename> # Patch file location: engine_patches/<repo_tag>/<patch_filename> # repo_tag maps to engine source subdir: #   dart-sdk       鈫?engine/src/dart #   flutter-engine 鈫?engine/src/flutter # # RustDesk-verified patches (Flutter 3.24.5 baseline, confirmed on 3.44.1) dart-sdk:0001-dart-revert-GetHostNameW.patch dart-sdk:0002-dart-restore-RtlAddGrowableFunctionTable.patch dart-sdk:0003-dart-revert-PathCchCombineEx.patch  # New patches for 3.24 -> 3.44 delta (stage 1 audit output) flutter-engine:0004-embedder-disable-impeller-ensure-angle.patch flutter-engine:0005-embedder-pointer-mouse-fallback.patch flutter-engine:0006-embedder-thread-naming-compat.patch dart-sdk:0007-dart-file-ops-fallback-win7.patch
+# engine_patches/series
+# Patch application order for Flutter 3.44.1 / Dart 3.12.1 Win7 support
+#
+# Format: <repo_tag>:<patch_filename>
+# Patch file location: engine_patches/<repo_tag>/<patch_filename>
+# repo_tag maps to engine source subdir:
+#   dart-sdk       鈫?engine/src/dart
+#   flutter-engine 鈫?engine/src/flutter
+#
+# RustDesk-verified patches (Flutter 3.24.5 baseline, confirmed on 3.44.1)
+dart-sdk:0001-dart-revert-GetHostNameW.patch
+dart-sdk:0002-dart-restore-RtlAddGrowableFunctionTable.patch
+dart-sdk:0003-dart-revert-PathCchCombineEx.patch
+
+# New patches for 3.24 -> 3.44 delta (stage 1 audit output)
+flutter-engine:0004-embedder-disable-impeller-ensure-angle.patch
+flutter-engine:0005-embedder-pointer-mouse-fallback.patch
+flutter-engine:0006-embedder-thread-naming-compat.patch
+dart-sdk:0007-dart-file-ops-fallback-win7.patch

@@ -1,1 +1,59 @@
-From: kelivo-win7 <dev@kelivo.local> Date: 2026-06-29 Subject: [PATCH 5/9] engine: dynamic-load pointer APIs with mouse fallback  Flutter Engine's Windows embedder uses these Win8+ pointer APIs:   - EnableMouseInPointer (Win8+)   - GetPointerInfo (Win8+)   - RegisterPointerInputTargetEx (Win8+)  On Win7, these functions don't exist. We need to load them dynamically via GetProcAddress, falling back to traditional WM_MOUSEMOVE/WM_LBUTTONDOWN message handling.  --- a/flutter/shell/platform/windows/pointer_injector_win32.cc +++ b/flutter/shell/platform/windows/pointer_injector_win32.cc @@ -XX,XX +XX,XX @@  // In initialization: -  EnableMouseInPointer(TRUE);  // BOOL return; fails on Win7 +  // Win7 compat: dynamic load +  using EnableMouseInPointerFunc = BOOL(WINAPI*)(BOOL); +  auto EnableMouseInPointer = +      reinterpret_cast<EnableMouseInPointerFunc>( +          GetProcAddress(GetModuleHandleW(L"user32.dll"), +                         "EnableMouseInPointer")); +  if (EnableMouseInPointer) { +    EnableMouseInPointer(TRUE); +  } else { +    // Win7: keep default mouse handling (WM_MOUSEMOVE etc.) +    // No registration needed. +  }  --- a/flutter/shell/platform/windows/flutter_windows_view.cc +++ b/flutter/shell/platform/windows/flutter_windows_view.cc @@ -XX,XX +XX,XX @@  // In OnPointerEvent or equivalent: -  GetPointerInfo(pointer_id, &info); +  // Win7 compat +  using GetPointerInfoFunc = BOOL(WINAPI*)(UINT32, POINTER_INFO*); +  auto GetPointerInfo = +      reinterpret_cast<GetPointerInfoFunc>( +          GetProcAddress(GetModuleHandleW(L"user32.dll"), +                         "GetPointerInfo")); +  if (GetPointerInfo) { +    GetPointerInfo(pointer_id, &info); +  } else { +    // Win7: synthesize from mouse message lParam/wParam +    // ... +  }  === How to generate this patch === Run in engine/src/flutter:   # Find the exact lines in the 3.44.1 source   grep -n "EnableMouseInPointer" shell/platform/windows/*.cc   # Generate a proper diff after editing   git diff > 0005-embedder-pointer-mouse-fallback.patch  === RustDesk reference === Check rustdesk/engine for their equivalent patches to the embedder input handling.
+From: kelivo-win7 <dev@kelivo.local>
+Date: 2026-06-29
+Subject: [PATCH 5/9] engine: dynamic-load pointer APIs with mouse fallback
+
+Flutter Engine's Windows embedder uses these Win8+ pointer APIs:
+  - EnableMouseInPointer (Win8+)
+  - GetPointerInfo (Win8+)
+  - RegisterPointerInputTargetEx (Win8+)
+
+On Win7, these functions don't exist. We need to load them
+dynamically via GetProcAddress, falling back to traditional
+WM_MOUSEMOVE/WM_LBUTTONDOWN message handling.
+
+--- a/flutter/shell/platform/windows/pointer_injector_win32.cc
++++ b/flutter/shell/platform/windows/pointer_injector_win32.cc
+@@ -XX,XX +XX,XX @@
+ // In initialization:
+-  EnableMouseInPointer(TRUE);  // BOOL return; fails on Win7
++  // Win7 compat: dynamic load
++  using EnableMouseInPointerFunc = BOOL(WINAPI*)(BOOL);
++  auto EnableMouseInPointer =
++      reinterpret_cast<EnableMouseInPointerFunc>(
++          GetProcAddress(GetModuleHandleW(L"user32.dll"),
++                         "EnableMouseInPointer"));
++  if (EnableMouseInPointer) {
++    EnableMouseInPointer(TRUE);
++  } else {
++    // Win7: keep default mouse handling (WM_MOUSEMOVE etc.)
++    // No registration needed.
++  }
+
+--- a/flutter/shell/platform/windows/flutter_windows_view.cc
++++ b/flutter/shell/platform/windows/flutter_windows_view.cc
+@@ -XX,XX +XX,XX @@
+ // In OnPointerEvent or equivalent:
+-  GetPointerInfo(pointer_id, &info);
++  // Win7 compat
++  using GetPointerInfoFunc = BOOL(WINAPI*)(UINT32, POINTER_INFO*);
++  auto GetPointerInfo =
++      reinterpret_cast<GetPointerInfoFunc>(
++          GetProcAddress(GetModuleHandleW(L"user32.dll"),
++                         "GetPointerInfo"));
++  if (GetPointerInfo) {
++    GetPointerInfo(pointer_id, &info);
++  } else {
++    // Win7: synthesize from mouse message lParam/wParam
++    // ...
++  }
+
+=== How to generate this patch ===
+Run in engine/src/flutter:
+  # Find the exact lines in the 3.44.1 source
+  grep -n "EnableMouseInPointer" shell/platform/windows/*.cc
+  # Generate a proper diff after editing
+  git diff > 0005-embedder-pointer-mouse-fallback.patch
+
+=== RustDesk reference ===
+Check rustdesk/engine for their equivalent patches
+to the embedder input handling.
