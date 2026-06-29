@@ -1,5 +1,4 @@
-# =====================================================
-# Flutter Engine Windows x64 Release (Win7-compatible)
+# Kelivo Win7 Engine Build CI (rev 2)
 # =====================================================
 # Builds a patched Flutter 3.44.1 engine with Win7 support,
 # then builds Kelivo against it, producing a complete release zip.
