@@ -37,6 +37,7 @@ env:
   ENGINE_SRC: C:\engine\src
   ENGINE_COMMIT: c416acfeb8126e097f758c664aaa3da929e27da0
   ARTIFACT_NAME: flutter-engine-win7-x64
+  DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
 
 jobs:
   build-engine:
@@ -62,15 +63,15 @@ jobs:
           # fetch --no-history --nohooks flutter (takes ~15 min)
           fetch --no-history --nohooks flutter
           cd src\flutter
-          # Flutter 3.44.1 engine commit (from bin/internal/engine.version)
-          # Use the specific commit hash instead of tag (engine repo tags differ)
-          git fetch --depth 1 origin "$env:ENGINE_COMMIT"
+          # Unshallow to access older commits, then checkout the 3.44.1 engine commit
+          git fetch --unshallow origin 2>$null; git fetch origin
           git checkout "$env:ENGINE_COMMIT"
           cd ..
+          # gclient sync will fetch Dart SDK at the pinned version via DEPS
           gclient sync --with_branch_heads --with_tags -D --jobs=4
           gclient runhooks
         shell: pwsh
-        timeout-minutes: 60
+        timeout-minutes: 90
 
       - name: Apply Win7 compatibility patches
         run: |
