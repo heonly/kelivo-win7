@@ -37,14 +37,20 @@ from pathlib import Path
 PATCH_DIR = Path(__file__).resolve().parent.parent / "engine_patches"
 SERIES_FILE = PATCH_DIR / "series"
 REPO_MAP = {
-    "dart-sdk":   "dart",
+    "dart-sdk":       "dart",
     "flutter-engine": "flutter",
-    "flutter":    "flutter",  # meta-repo config patches
 }
 
 
 def parse_series():
-    """Parse series file into [(src_subdir, patch_rel_path), ...]."""
+    """Parse series file into [(src_subdir, patch_rel_path), ...].
+
+    Series format: <repo_tag>:<patch_filename>
+    The patch file is located at engine_patches/<repo_tag>/<patch_filename>.
+
+    Example: 'dart-sdk:0001-dart-revert-GetHostNameW.patch'
+      → engine_patches/dart-sdk/0001-dart-revert-GetHostNameW.patch
+    """
     if not SERIES_FILE.exists():
         print(f"[ERROR] Series file not found: {SERIES_FILE}", file=sys.stderr)
         sys.exit(1)
@@ -55,17 +61,18 @@ def parse_series():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            # Format: <subdir>:<path>
+            # Format: <repo_tag>:<patch_filename>
             if ":" not in line:
                 print(f"[WARN] Skipping malformed series entry: {line}")
                 continue
-            repo_subdir, patch_rel = line.split(":", 1)
+            repo_subdir, patch_filename = line.split(":", 1)
             if repo_subdir not in REPO_MAP:
                 print(f"[WARN] Unknown repo tag '{repo_subdir}', skipping: {line}")
                 continue
-            patch_path = (PATCH_DIR / patch_rel).resolve()
+            # The patch file lives in a subdirectory matching the repo_tag
+            patch_path = (PATCH_DIR / repo_subdir / patch_filename).resolve()
             if not patch_path.exists():
-                print(f"[WARN] Patch file not found, skipping: {patch_path}")
+                print(f"[WARN] Patch file not found: {patch_path}")
                 continue
             patches.append((repo_subdir, patch_path))
     return patches

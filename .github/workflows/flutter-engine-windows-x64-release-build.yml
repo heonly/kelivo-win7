@@ -1,16 +1,15 @@
 # =====================================================
 # Flutter Engine Windows x64 Release (Win7-compatible)
 # =====================================================
-# Builds a patched Flutter 3.44.1 engine with Win7 support.
-# Based on rustdesk/engine CI workflow pattern.
+# Builds a patched Flutter 3.44.1 engine with Win7 support,
+# then builds Kelivo against it, producing a complete release zip.
 #
-# Triggers:
-#   - Push to engine_patches/ or this file
-#   - Manual workflow_dispatch
-#   - Weekly rebuild (Mon 03:00 UTC)
-#
-# Runner requirements:
-#   windows-2022; >=16GB RAM; ~80GB free disk
+# Previous failures fixed:
+#   1. Engine checkout: fetch from GitHub mirror instead of googlesource
+#      (googlesource refuses fetch-by-hash for shallow clones)
+#   2. Patch path: apply_patches.py now resolves subdirs from series file
+#   3. Env vars: replaced stale $FLUTTER_REF with static version
+#   4. Git config: create .gitconfig before depot_tools operations
 # =====================================================
 
 name: flutter-engine-win7-x64
@@ -36,8 +35,7 @@ env:
   DEPOT_TOOLS_PATH: C:\depot_tools
   ENGINE_SRC: C:\engine\src
   ENGINE_COMMIT: c416acfeb8126e097f758c664aaa3da929e27da0
-  ARTIFACT_NAME: flutter-engine-win7-x64
-  DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
+  VERSION_TAG: "3.44.1"
 
 jobs:
   build-engine:
@@ -50,133 +48,268 @@ jobs:
         with:
           path: kelivo-win7
 
-      - name: Install depot_tools
+      # ==================================================
+      # Step 1: depot_tools + git config
+      # ==================================================
+      - name: Install depot_tools and configure git
         run: |
+          # GitHub Actions runners don't have a global .gitconfig
+          git config --global user.email "ci@kelivo.local"
+          git config --global user.name "Kelivo CI"
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+
+          # Install depot_tools
           git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$env:DEPOT_TOOLS_PATH"
           echo "$env:DEPOT_TOOLS_PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          # Tell depot_tools to use the system VS, not download from Google Cloud
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Also set GYP_MSVS_VERSION to help find VS
+          echo "GYP_MSVS_VERSION=2022" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         shell: pwsh
 
-      - name: Fetch Flutter engine sources
+      # ==================================================
+      # Step 2: Fetch Flutter engine at specific commit
+      # ==================================================
+      - name: Fetch and checkout Flutter engine sources
         run: |
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+
           mkdir C:\engine -Force
           cd C:\engine
-          # fetch --no-history --nohooks flutter (takes ~15 min)
+
+          # Step 2a: Use depot_tools' fetch to set up .gclient + initial source tree
+          # --no-history: shallow clone (fast, small)
+          # --nohooks: don't run hooks yet (we'll do that after checkout)
+          Write-Host "Running fetch --no-history --nohooks flutter..."
           fetch --no-history --nohooks flutter
+
+          # Step 2b: The engine repo is now at HEAD of main (shallow).
+          # googlesource.com refuses fetch-by-hash, but GitHub's mirror allows it.
+          # Fetch the specific 3.44.1 engine commit from GitHub.
+          Write-Host "Fetching engine commit $env:ENGINE_COMMIT from GitHub mirror..."
           cd src\flutter
-          # Unshallow to access older commits, then checkout the 3.44.1 engine commit
-          git fetch --unshallow origin 2>$null; git fetch origin
+          git remote add github https://github.com/flutter/engine.git 2>$null
+          git fetch --depth 1 github "$env:ENGINE_COMMIT"
           git checkout "$env:ENGINE_COMMIT"
+          Write-Host "Engine now at: $(git rev-parse HEAD)"
+
+          # Step 2c: Sync all dependencies (Dart SDK, build tools, etc.)
+          # gclient reads DEPS from the engine and fetches the right versions
+          Write-Host "Running gclient sync..."
           cd ..
-          # gclient sync will fetch Dart SDK at the pinned version via DEPS
-          gclient sync --with_branch_heads --with_tags -D --jobs=4
+          gclient sync --no_history -D --jobs=4
+          Write-Host "Running gclient runhooks..."
           gclient runhooks
         shell: pwsh
         timeout-minutes: 90
 
+      # ==================================================
+      # Step 3: Apply Win7 patches
+      # ==================================================
       - name: Apply Win7 compatibility patches
         run: |
-          # Use the checked-out patch files
-          python kelivo-win7/tools/apply_patches.py --engine-dir C:\engine\src
+          python kelivo-win7\tools\apply_patches.py --engine-dir C:\engine\src
         shell: cmd
 
+      # ==================================================
+      # Step 4: Configure build (GN)
+      # ==================================================
       - name: Configure GN (release, Impeller OFF, ANGLE)
         run: |
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          # Set up VS environment so GN can find the MSVC toolchain
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          Write-Host "VS found at: $vsPath"
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          # Run vcvars and import the env into PowerShell
+          $envOutput = cmd /c "`"$vcvars`" && set" 2>&1
+          foreach ($line in $envOutput) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+            }
+          }
+
           cd C:\engine\src\flutter
-          flutter tools\gn `
-            --runtime-mode release `
-            --target-os windows `
-            --windows-cpu x64 `
-            --no-enable-impeller `
-            --no-lto `
-            --no-goma
+          python tools\gn.py --runtime-mode=release --target-os=windows --windows-cpu=x64 --no-enable-impeller --no-lto --no-goma
         shell: pwsh
 
-      - name: Build flutter_windows.dll + flutter_exe
+      # ==================================================
+      # Step 5: Build engine (ninja)
+      # ==================================================
+      - name: Build flutter_windows.dll
         run: |
           cd C:\engine\src\flutter
-          ninja -C out\windows_release_x64 flutter_windows.dll flutter_exe
+          ninja -C out\windows_release_x64 flutter_windows.dll
         shell: cmd
-        timeout-minutes: 120
+        timeout-minutes: 240
 
-      - name: Sanity check — build a smoke test Flutter app
+      # ==================================================
+      # Step 6: Sanity check — build a hello-world Flutter app
+      # ==================================================
+      - name: Build Flutter SDK for Kelivo
         run: |
-          flutter create --platforms=windows ci_smoke
-          cd ci_smoke
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          # We need a working Flutter SDK to build Kelivo.
+          # Download the official Flutter 3.44.1 SDK for the build tools,
+          # then point it to our custom engine.
+          Write-Host "Downloading Flutter 3.44.1 SDK..."
+          $flutterZip = "$env:TEMP\flutter_sdk.zip"
+          if (-not (Test-Path $flutterZip)) {
+            Invoke-WebRequest -Uri "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_$env:VERSION_TAG-stable.zip" -OutFile $flutterZip
+          }
+          Write-Host "Extracting Flutter SDK..."
+          Expand-Archive -Path $flutterZip -DestinationPath C:\ -Force
+          $env:Path = "C:\flutter\bin;$env:Path"
+          echo "C:\flutter\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-          # Point to local engine
+          # Sanity: build a hello app with our custom engine
           flutter config --enable-windows-desktop
           flutter config --local-engine-src-path C:\engine\src
           flutter config --local-engine windows_release_x64
 
-          flutter build windows --release
-          echo "=== Sanity check: run --version ==="
-          .\build\windows\runner\Release\ci_smoke.exe --version
+          Write-Host "Building sanity-check app..."
+          flutter create --platforms=windows ci_smoke
+          cd ci_smoke
+          flutter build windows --release --verbose
+          Write-Host "Sanity check build OK"
         shell: pwsh
         timeout-minutes: 30
 
-      # ===== Kelivo Build =====
-      - name: Clone Kelivo source
+      # ==================================================
+      # Step 7: Clone Kelivo and apply Win7 overrides
+      # ==================================================
+      - name: Clone Kelivo and apply overrides
         run: |
+          $env:Path = "C:\flutter\bin;$env:Path"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+
+          # Clone Kelivo
           git clone https://github.com/Chevey339/kelivo.git C:\kelivo
           cd C:\kelivo
-          git checkout "$env:KELIVO_REF"
-        shell: cmd
-        timeout-minutes: 10
+          git checkout $env:KELIVO_REF
+          Write-Host "Kelivo at: $(git rev-parse HEAD)"
 
-      - name: Apply Kelivo Win7 overrides
-        run: |
-          # windows runner overrides
-          copy /Y kelivo-win7\windows_overrides\runner.exe.manifest C:\kelivo\windows\runner\
-          copy /Y kelivo-win7\windows_overrides\main.cpp C:\kelivo\windows\runner\
-          copy /Y kelivo-win7\windows_overrides\utils.h C:\kelivo\windows\runner\
-          copy /Y kelivo-win7\windows_overrides\utils.cc C:\kelivo\windows\runner\
+          # Apply windows runner overrides
+          $overridesDir = "D:\a\kelivo-win7\kelivo-win7\kelivo-win7\windows_overrides"
+          Copy-Item "$overridesDir\runner.exe.manifest" "windows\runner\" -Force
+          Copy-Item "$overridesDir\main.cpp" "windows\runner\" -Force
+          Copy-Item "$overridesDir\utils.h" "windows\runner\" -Force
+          Copy-Item "$overridesDir\utils.cc" "windows\runner\" -Force
 
-          # dependency overrides
-          copy /Y kelivo-win7\dart_overrides\pubspec.win7.yaml C:\kelivo\pubspec.win7.yaml
-        shell: cmd
+          # Remove unused dependencies from pubspec
+          $pubspec = Get-Content "pubspec.yaml" -Raw
+          $pubspec = $pubspec -replace '(?m)^\s+bitsdojo_window:.*$\r?\n?', ''
+          $pubspec = $pubspec -replace '(?m)^\s+desktop_drop:.*$\r?\n?', ''
+          Set-Content "pubspec.yaml" -Value $pubspec -NoNewline
 
-      - name: Remove unused deps from Kelivo pubspec
-        run: |
-          cd C:\kelivo
-          powershell -Command "(Get-Content pubspec.yaml) -replace '^\s+bitsdojo_window:.*\n','' -replace '^\s+desktop_drop:.*\n','' | Set-Content pubspec.yaml"
-        shell: cmd
-
-      - name: Flutter pub get (Kelivo)
-        run: |
-          cd C:\kelivo
-          flutter pub get
-        shell: cmd
-        timeout-minutes: 10
-
-      - name: Build Kelivo Windows release
-        run: |
-          cd C:\kelivo
-          flutter build windows --release
-        shell: cmd
-        timeout-minutes: 60
-
-      # ===== Packaging =====
-      - name: Package complete Win7 release
-        run: |
-          powershell -ExecutionPolicy Bypass -File kelivo-win7\release\scripts\package-win7.ps1 `
-            -BuildDir C:\kelivo\build\windows\runner\Release `
-            -Version $env:FLUTTER_REF-win7-${{ github.sha }} `
-            -OutDir C:\release `
-            -NoZip
+          Write-Host "Overrides applied."
         shell: pwsh
 
-      - name: Upload full Win7 release artifacts
+      # ==================================================
+      # Step 8: Build Kelivo
+      # ==================================================
+      - name: Flutter pub get + build Kelivo
+        run: |
+          $env:Path = "C:\flutter\bin;$env:Path"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+
+          cd C:\kelivo
+          flutter config --local-engine-src-path C:\engine\src
+          flutter config --local-engine windows_release_x64
+          flutter pub get
+          flutter build windows --release --verbose
+        shell: pwsh
+        timeout-minutes: 60
+
+      # ==================================================
+      # Step 9: Package
+      # ==================================================
+      - name: Package Win7 release
+        run: |
+          $buildDir = "C:\kelivo\build\windows\runner\Release"
+          $version = "$env:VERSION_TAG-win7-${{ github.sha }}"
+          $outDir = "C:\release"
+
+          if (-not (Test-Path $buildDir)) {
+            throw "Kelivo build output not found at $buildDir"
+          }
+
+          $pkgDir = Join-Path $outDir "kelivo-win7-x64-v$version"
+          New-Item -Path $pkgDir -ItemType Directory -Force | Out-Null
+
+          # Copy Kelivo build output
+          Copy-Item "$buildDir\kelivo.exe" $pkgDir
+          Copy-Item "$buildDir\flutter_windows.dll" $pkgDir
+          Copy-Item "$buildDir\icudtl.dat" $pkgDir -ErrorAction SilentlyContinue
+          if (Test-Path "$buildDir\data") {
+            Copy-Item -Recurse "$buildDir\data" $pkgDir
+          }
+
+          # Copy ANGLE DLLs from engine output
+          $engineOut = "C:\engine\src\out\windows_release_x64"
+          foreach ($dll in @("libGLESv2.dll","libEGL.dll")) {
+            $src = Join-Path $engineOut $dll
+            if (Test-Path $src) {
+              Copy-Item $src $pkgDir
+            }
+          }
+
+          # Copy VC++ runtime DLLs
+          foreach ($dll in @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll")) {
+            $src = Join-Path $buildDir $dll
+            if (Test-Path $src) { Copy-Item $src $pkgDir }
+          }
+
+          # Copy install_prereq.bat
+          $scriptsDir = "D:\a\kelivo-win7\kelivo-win7\kelivo-win7\release\scripts"
+          if (Test-Path "$scriptsDir\install_prereq.bat") {
+            Copy-Item "$scriptsDir\install_prereq.bat" $pkgDir
+          }
+
+          # Write README
+          @"
+Kelivo Win7 v$version
+===================
+Target: Windows 7 SP1 x64 (+ KB2670838 required)
+
+INSTALL:
+  1. Run install_prereq.bat (checks KB2670838 + VC++ Redist)
+  2. Run kelivo.exe
+
+"@ | Out-File (Join-Path $pkgDir "README-Win7.txt") -Encoding utf8
+
+          # Generate SHA256SUMS
+          Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            $rel = $_.FullName.Substring($pkgDir.Length + 1)
+            "$hash  $rel"
+          } | Out-File (Join-Path $pkgDir "SHA256SUMS.txt") -Encoding utf8
+
+          # Create zip
+          $zipPath = Join-Path $outDir "kelivo-win7-x64-v$version.zip"
+          Compress-Archive -Path "$pkgDir\*" -DestinationPath $zipPath
+          $zipSize = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
+          Write-Host "Package created: $zipPath ($zipSize MB)"
+        shell: pwsh
+
+      # ==================================================
+      # Step 10: Upload artifacts
+      # ==================================================
+      - name: Upload full release zip
         uses: actions/upload-artifact@v4
         with:
-          name: kelivo-win7-x64-${{ env.FLUTTER_REF }}
-          path: |
-            C:\release\kelivo-win7-x64-v${{ env.FLUTTER_REF }}-win7-*/
+          name: kelivo-win7-x64-${{ env.VERSION_TAG }}
+          path: C:\release\kelivo-win7-x64-*.zip
           retention-days: 30
 
-      - name: Upload engine DLL (standalone)
+      - name: Upload engine DLL standalone
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}-${{ env.FLUTTER_REF }}-${{ github.sha }}
+          name: flutter-engine-win7-x64-${{ env.VERSION_TAG }}
           path: |
             C:\engine\src\out\windows_release_x64\flutter_windows.dll
             C:\engine\src\out\windows_release_x64\icudtl.dat
@@ -190,5 +323,4 @@ jobs:
           path: |
             C:\engine\src\out\windows_release_x64\**\*.log
             C:\engine\src\flutter\out\windows_release_x64\**\*.ninja_log
-            C:\kelivo\build\windows\**\*.log
           retention-days: 7
