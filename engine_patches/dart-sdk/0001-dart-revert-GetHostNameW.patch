@@ -1,0 +1,51 @@
+From: kelivo-win7 <dev@kelivo.local>
+Date: 2026-06-29
+Subject: [PATCH 1/9] dart: revert GetHostNameW (Win8+) to gethostname (Win7-compat)
+
+Dart SDK switched from gethostname() to GetHostNameW() to fix
+Platform.localHostname on Chinese Windows (issue #52701).
+GetHostNameW is only available on Windows 8+.
+
+Revert this change to restore Win7 compatibility.
+Side effect: Platform.localHostname may return garbage on Chinese
+Windows 7 builds. Kelivo does not rely on this property.
+
+Upstream commit that introduced the Win8+ API:
+  https://github.com/dart-lang/sdk/commit/<find-in-3.12.1>
+
+RustDesk reference:
+  https://github.com/rustdesk/engine (applies equivalent revert)
+
+--- a/runtime/bin/platform_win.cc
++++ b/runtime/bin/platform_win.cc
+@@ -XX,XX +XX,XX @@
+ // Implementation for Windows
+
+ // ...
+-  // Use GetHostNameW (Win8+)
+-  wchar_t wide_name[256];
+-  DWORD size = sizeof(wide_name);
+-  if (GetHostNameW(wide_name, &size) != ERROR_SUCCESS) {
+-    return String::Empty();
+-  }
++  // Use gethostname (Win7 compatible)
++  char name[256];
++  if (gethostname(name, sizeof(name)) != 0) {
++    return String::Empty();
++  }
++  const wchar_t* wide_name = Utf8ToWide(name);
+   // ... rest of function unchanged
+--- a/runtime/bin/process_win.cc
++++ b/runtime/bin/process_win.cc
+@@ -XX,XX +XX,XX @@
+   // Similar revert for any other GetHostNameW usage in process code
+   // ...
+
+=== How to generate this patch from engine source ===
+Run in your engine/src/dart directory:
+  # Find the commit that introduced GetHostNameW in runtime/bin/
+  git log --all --oneline -- runtime/bin/platform_win.cc | head -20
+  # Revert it
+  git revert <commit-hash> --no-edit
+  # Export as patch
+  git format-patch -1 HEAD

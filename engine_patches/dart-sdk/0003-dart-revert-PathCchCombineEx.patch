@@ -1,0 +1,27 @@
+From: kelivo-win7 <dev@kelivo.local>
+Date: 2026-06-29
+Subject: [PATCH 3/9] dart: revert PathCchCombineEx (Win8+) to PathCombine (Win7-compat)
+
+Dart SDK fixed a bug where relative symlinks to directories did not
+work on Windows (issue <unknown>). The fix used PathCchCombineEx
+which is only available on Windows 8+.
+
+Revert to PathCombine (Win7-compatible, with a small buffer size
+limitation of MAX_PATH = 260 chars — fine for Kelivo's use).
+
+Upstream commit:
+  https://github.com/dart-lang/sdk/commit/b4574904f9cd0d6f7147950c02ee2447569d0be9
+  "Fix a bug where relative symlinks to directories did not work on Windows"
+
+Files affected:
+  - runtime/bin/file_win.cc (File::GetType)
+
+Side effect: relative symlink handling on Win7 may regress.
+Kelivo uses absolute paths for all config and data storage,
+so this does not affect Kelivo functionality.
+
+=== How to generate this patch from engine source ===
+Run in your engine/src/dart directory:
+  git revert b4574904f9cd0d6f7147950c02ee2447569d0be9 --no-edit
+  # (If 3.12.1 has the commit)
+  git format-patch -1 HEAD

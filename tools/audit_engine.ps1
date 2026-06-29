@@ -1,0 +1,262 @@
+<#
+.SYNOPSIS
+    Engine Win10+ API Audit — scan Flutter Engine + Dart SDK for Win8+ API usage.
+.DESCRIPTION
+    Implements the 4-entry audit methodology from plan §2.1.
+    Run this inside the engine source tree (after gclient sync).
+
+    Entries:
+    A — grep Dart SDK runtime for known Win8+ APIs
+    B — grep Flutter Engine embedder for known Win8+ APIs
+    C — dumpbin analysis of built flutter_windows.dll IAT
+    D — GitHub commit range analysis (optional, needs gh CLI)
+
+.OUTPUTS
+    Writes audit-report.md and audit-raw.csv to the specified output directory.
+.PARAMETER EngineSrc
+    Path to engine/src (contains flutter/ and dart/ subdirs).
+.PARAMETER OutDir
+    Where to write audit reports. Defaults to ./audit-output.
+.PARAMETER DumpbinPath
+    Path to dumpbin.exe. Auto-detects from VS if not set.
+.PARAMETER RunDumpbin
+    Also scan the built DLL (requires a prior engine release build).
+    Set -RunDumpbin $true and provide -BuiltDllPath.
+.PARAMETER BuiltDllPath
+    Path to flutter_windows.dll (Release build output) for dumpbin scan.
+#>
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$EngineSrc,
+    [string]$OutDir = "./audit-output",
+    [string]$DumpbinPath = "",
+    [switch]$RunDumpbin = $false,
+    [string]$BuiltDllPath = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+# — detect tooling —
+if (-not $DumpbinPath) {
+    # Try to find dumpbin in VS installation
+    $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+        -latest -property installationPath 2>$null
+    if ($vsPath) {
+        $dumpbinCandidates = @(
+            Join-Path $vsPath "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe"
+        )
+        $found = Get-ChildItem $dumpbinCandidates[0] -ErrorAction SilentlyContinue
+        if ($found) {
+            $DumpbinPath = $found[-1].FullName
+        }
+    }
+}
+
+if ($DumpbinPath) {
+    Write-Host "[OK] dumpbin: $DumpbinPath"
+} elseif ($RunDumpbin) {
+    Write-Warning "dumpbin.exe not found. Run from VS Developer PowerShell or set -DumpbinPath."
+}
+
+# — prepare output dir —
+$outDir = Resolve-Path (Join-Path (Get-Location) $OutDir) -ErrorAction SilentlyContinue
+if (-not $outDir) {
+    $outDir = New-Item -ItemType Directory -Path $OutDir -Force
+}
+$reportFile = Join-Path $outDir "audit-report.md"
+$csvFile = Join-Path $outDir "audit-raw.csv"
+$engineSrc = Resolve-Path $EngineSrc
+
+Write-Host "Engine source: $engineSrc"
+Write-Host "Output: $outDir"
+Write-Host ""
+
+# — Known Win8+ APIs to search for —
+$win8Apis = @(
+    @{Name="GetHostNameW";          Module="kernel32";  Pattern="GetHostNameW";         Note="Win8+ locale-safe hostname"}
+    @{Name="PathCchCombineEx";      Module="shlwapi";   Pattern="PathCchCombineEx";     Note="Win8+ path combiner"}
+    @{Name="RtlAddGrowableFunctionTable"; Module="ntdll"; Pattern="RtlAddGrowableFunctionTable"; Note="Win8+ SEH unwinding"}
+    @{Name="SetFileInformationByHandle"; Module="kernel32"; Pattern="SetFileInformationByHandle"; Note="Win10+ modern file ops"}
+    @{Name="GetPointerInfo";        Module="user32";    Pattern="GetPointerInfo";       Note="Win8+ pointer input"}
+    @{Name="EnableMouseInPointer";  Module="user32";    Pattern="EnableMouseInPointer"; Note="Win8+ mouse pointer coalescing"}
+    @{Name="RegisterPointerInputTarget"; Module="user32"; Pattern="RegisterPointerInputTarget"; Note="Win8+ pointer routing"}
+    @{Name="DCompositionCreateSurfaceHandle"; Module="dcomp"; Pattern="DCompositionCreateSurfaceHandle"; Note="Win8+ DirectComposition"}
+    @{Name="GetSystemTimePreciseAsFileTime"; Module="kernel32"; Pattern="GetSystemTimePreciseAsFileTime"; Note="Win8+ high-precision time"}
+    @{Name="SetThreadDescription";  Module="kernel32";  Pattern="SetThreadDescription";  Note="Win10 1607+ thread naming"}
+    @{Name="GetThreadDescription";  Module="kernel32";  Pattern="GetThreadDescription";  Note="Win10 1607+ thread naming"}
+)
+
+# ============================================================
+# ENTRY A: Grep Dart SDK runtime
+# ============================================================
+Write-Host "=== [A] Dart SDK runtime scan ===" -ForegroundColor Cyan
+$dartRuntime = Join-Path $engineSrc "dart/runtime"
+$resultsA = @()
+
+if (Test-Path $dartRuntime) {
+    foreach ($api in $win8Apis) {
+        $matches = Select-String -Path "$dartRuntime\**\*.cc","$dartRuntime\**\*.h" `
+            -Pattern $api.Pattern -SimpleMatch -CaseSensitive -List 2>$null
+        if ($matches) {
+            Write-Host "  FOUND $($api.Name) in:" -ForegroundColor Yellow
+            foreach ($m in $matches) {
+                Write-Host "    $($m.Path)"
+                $resultsA += [PSCustomObject]@{
+                    Entry="A"; Api=$api.Name; Module=$api.Module; Note=$api.Note
+                    File=$m.Path; Status="FOUND"
+                }
+            }
+        } else {
+            Write-Host "  NOT FOUND $($api.Name)" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "  [SKIP] Dart runtime dir not found: $dartRuntime"
+}
+
+# ============================================================
+# ENTRY B: Grep Flutter Engine embedder
+# ============================================================
+Write-Host "=== [B] Flutter Engine embedder scan ===" -ForegroundColor Cyan
+$embedderDir = Join-Path $engineSrc "flutter/shell/platform/windows"
+$resultsB = @()
+
+if (Test-Path $embedderDir) {
+    foreach ($api in $win8Apis) {
+        $matches = Select-String -Path "$embedderDir\**\*.cc","$embedderDir\**\*.h" `
+            -Pattern $api.Pattern -SimpleMatch -CaseSensitive -List 2>$null
+        if ($matches) {
+            Write-Host "  FOUND $($api.Name) in:" -ForegroundColor Yellow
+            foreach ($m in $matches) {
+                Write-Host "    $($m.Path)"
+                $resultsB += [PSCustomObject]@{
+                    Entry="B"; Api=$api.Name; Module=$api.Module; Note=$api.Note
+                    File=$m.Path; Status="FOUND"
+                }
+            }
+        } else {
+            Write-Host "  NOT FOUND $($api.Name)" -ForegroundColor Green
+        }
+    }
+} else {
+    Write-Host "  [SKIP] Embedder dir not found: $embedderDir"
+}
+
+# ============================================================
+# ENTRY C: dumpbin IAT scan (optional)
+# ============================================================
+$resultsC = @()
+if ($RunDumpbin -and $DumpbinPath -and (Test-Path $BuiltDllPath)) {
+    Write-Host "=== [C] dumpbin IAT scan ===" -ForegroundColor Cyan
+    $iatOutput = Join-Path $outDir "iat-imports.txt"
+    & $DumpbinPath /imports $BuiltDllPath | Out-File $iatOutput
+
+    # Parse import tables for each known Win8+ API
+    $importContent = Get-Content $iatOutput -Raw
+    foreach ($api in $win8Apis) {
+        if ($importContent -match $api.Pattern) {
+            Write-Host "  DLL IAT CONTAINS $($api.Name)" -ForegroundColor Yellow
+            $resultsC += [PSCustomObject]@{
+                Entry="C"; Api=$api.Name; Module=$api.Module; Note=$api.Note
+                File="flutter_windows.dll"; Status="IAT_FOUND"
+            }
+        }
+    }
+} else {
+    Write-Host "=== [C] dumpbin IAT — skipped (use -RunDumpbin + -BuiltDllPath)" -ForegroundColor DarkGray
+}
+
+# ============================================================
+# ENTRY D: GitHub commit range analysis (optional)
+# ============================================================
+$resultsD = @()
+$ghPath = Get-Command "gh" -ErrorAction SilentlyContinue
+if ($ghPath) {
+    Write-Host "=== [D] GitHub commit range scan ===" -ForegroundColor Cyan
+    Write-Host "  Run manually after setting FLUTTER_3_24_TAG and FLUTTER_3_44_TAG:"
+    Write-Host @"
+    gh api "repos/flutter/flutter/commits?sha=FLUTTER_3_44_TAG&path=shell/platform/windows&per_page=100" --paginate ^
+      | jq '.[].commit.message' | Select-String -Pattern "windows|win7|win32|dcomp|dwrite|d2d"
+"@ -ForegroundColor DarkGray
+} else {
+    Write-Host "=== [D] GitHub commit range — gh CLI not available, run manually" -ForegroundColor DarkGray
+}
+
+# ============================================================
+# Generate report
+# ============================================================
+$allResults = $resultsA + $resultsB + $resultsC + $resultsD
+
+$reportLines = @"
+# Engine Win10+ API Audit Report
+
+Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+Engine source: $engineSrc
+Flutter tag: (check src/flutter/.git/HEAD)
+
+## Summary
+
+| Entry | Scope | Win8+ APIs Found | Scan Tool |
+|---|---|---|---|
+| A | Dart SDK runtime | $($resultsA.Count) | grep (Select-String) |
+| B | Flutter Engine embedder | $($resultsB.Count) | grep (Select-String) |
+| C | flutter_windows.dll IAT | $($resultsC.Count) | dumpbin /imports |
+| D | GitHub commit range | (manual) | gh api + jq |
+
+## Detailed Findings
+
+"@
+
+$csvContent = "Entry,Api,Module,File,Note,Status`n"
+foreach ($r in $allResults) {
+    $csvContent += "$($r.Entry),$($r.Api),$($r.Module),$($r.File),$($r.Note),$($r.Status)`n"
+    $reportLines += @"
+### $($r.Entry): $($r.Api) (in $($r.File))
+- Module: $($r.Module)
+- Status: $($r.Status)
+- Note: $($r.Note)
+
+"@
+}
+
+$reportLines += @"
+## Patch Disposition
+
+| API | Disposition | Patch File |
+|---|---|---|
+"@
+
+# Add disposition lines for known APIs (match against known patches)
+$dispositions = @{
+    "GetHostNameW" = "REVERT known RustDesk commit → 0001-dart-revert-GetHostNameW.patch"
+    "RtlAddGrowableFunctionTable" = "RESTORE Dart SDK Win7 compat branch → 0002-dart-restore-RtlAddGrowableFunctionTable.patch"
+    "PathCchCombineEx" = "REVERT commit → 0003-dart-revert-PathCchCombineEx.patch"
+    "SetFileInformationByHandle" = "DYNAMIC_LOAD GetProcAddress fallback → 0007-dart-file-ops-fallback.patch"
+    "GetPointerInfo" = "DYNAMIC_LOAD with WM_INPUT fallback → 0005-embedder-pointer-mouse-fallback.patch"
+    "EnableMouseInPointer" = "DYNAMIC_LOAD with mouse fallback → 0005-embedder-pointer-mouse-fallback.patch"
+    "RegisterPointerInputTarget" = "DYNAMIC_LOAD with mouse fallback → 0005-embedder-pointer-mouse-fallback.patch"
+    "DCompositionCreateSurfaceHandle" = "ENGINE_CONFIG enable-impeller=OFF → 0004-embedder-disable-impeller-ensure-angle.patch; not a code revert"
+    "GetSystemTimePreciseAsFileTime" = "NO_ACTION — has fallback in Skia/Engine"
+    "SetThreadDescription" = "DYNAMIC_LOAD → 0006-embedder-thread-naming-compat.patch"
+    "GetThreadDescription" = "DYNAMIC_LOAD → 0006-embedder-thread-naming-compat.patch"
+}
+
+foreach ($apiName in ($allResults | Select-Object -ExpandProperty Api -Unique)) {
+    $disp = if ($dispositions.ContainsKey($apiName)) { $dispositions[$apiName] } else { "REVIEW needed" }
+    $reportLines += "| $apiName | $disp |\n"
+}
+
+$reportLines | Out-File $reportFile -Encoding utf8
+$csvContent | Out-File $csvFile -Encoding utf8
+
+Write-Host ""
+Write-Host "Report written: $reportFile" -ForegroundColor Green
+Write-Host "CSV data: $csvFile" -ForegroundColor Green
+Write-Host ""
+
+# — Summary API found count —
+$foundA = $allResults | Where-Object Entry -eq "A"
+$foundB = $allResults | Where-Object Entry -eq "B"
+$foundC = $allResults | Where-Object Entry -eq "C"
+Write-Host "Audit summary: A=$($foundA.Count) B=$($foundB.Count) C=$($foundC.Count) hits total=$($allResults.Count)"

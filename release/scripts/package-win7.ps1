@@ -1,0 +1,197 @@
+<#
+.SYNOPSIS
+    Package Kelivo Win7 release zip.
+
+.DESCRIPTION
+    Collects all required runtime files, creates the release directory
+    structure defined in §7.1 of the plan, and generates a portable
+    zip archive ready for GitHub Release upload.
+
+.PARAMETER BuildDir
+    Path to the Kelivo build output (build/windows/runner/Release).
+.PARAMETER Version
+    Version string for the zip filename, e.g. "1.1.17+61-win7".
+.PARAMETER OutDir
+    Where to create the package output directory and zip.
+.PARAMETER IncludePrereqMsu
+    If set, bundle KB2670838-x64.msu into the prerequisite folder.
+    The msu file must exist in ./release/files/prerequisite/.
+.PARAMETER IncludeWebview2
+    If set, bundle WebView2 Runtime offline installer.
+.PARAMETER NoZip
+    If set, prepare the directory but don't create the zip archive.
+#>
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$BuildDir,
+    [string]$Version = "1.1.17+61-win7",
+    [string]$OutDir = "./release/out",
+    [switch]$IncludePrereqMsu,
+    [switch]$IncludeWebview2,
+    [switch]$NoZip
+)
+
+$ErrorActionPreference = "Stop"
+
+# Resolve build output directory
+$buildDir = Resolve-Path $BuildDir
+if (-not (Test-Path "$buildDir\kelivo.exe")) {
+    throw "Build directory does not contain kelivo.exe: $buildDir"
+}
+
+# Create package staging directory
+$pkgDir = Join-Path $OutDir "kelivo-win7-x64-v$Version"
+if (Test-Path $pkgDir) { Remove-Item $pkgDir -Recurse -Force }
+New-Item -Path $pkgDir -ItemType Directory -Force | Out-Null
+
+Write-Host "Packaging Kelivo Win7 v$Version..." -ForegroundColor Cyan
+Write-Host "  Build source: $buildDir"
+Write-Host "  Package dir:  $pkgDir"
+Write-Host ""
+
+# === Core application files ===
+Write-Host "[1/6] Copying core application..." -ForegroundColor Yellow
+$coreFiles = @(
+    "kelivo.exe"
+    "flutter_windows.dll"
+    "icudtl.dat"
+    "libGLESv2.dll"
+    "libEGL.dll"
+)
+foreach ($file in $coreFiles) {
+    $src = Join-Path $buildDir $file
+    if (Test-Path $src) {
+        Copy-Item $src $pkgDir
+        Write-Host "  OK  $file"
+    } else {
+        Write-Warning "  MISSING $file"
+    }
+}
+
+# === Data directory ===
+Write-Host "[2/6] Copying data directory..." -ForegroundColor Yellow
+$dataDir = Join-Path $buildDir "data"
+if (Test-Path $dataDir) {
+    Copy-Item -Recurse $dataDir $pkgDir
+    Write-Host "  OK  data/ ($( (Get-ChildItem $dataDir -Recurse | Measure-Object Length -Sum).Sum / 1MB) MB)"
+} else {
+    Write-Warning "  MISSING data/"
+}
+
+# === VC++ Redistributable ===
+Write-Host "[3/6] Copying VC++ Redist..." -ForegroundColor Yellow
+$prereqDir = New-Item -Path (Join-Path $pkgDir "prerequisite") -ItemType Directory -Force
+$vcredistSrc = "..\..\release\files\vcredist_x64.exe"
+$vcredistPath = Join-Path $pkgDir "vcredist_x64.exe"
+if (Test-Path $vcredistSrc) {
+    Copy-Item $vcredistSrc $vcredistPath
+    Write-Host "  OK  vcredist_x64.exe"
+}
+# Also copy the per-app local DLLs if they exist
+foreach ($dll in @("msvcp140.dll","vcruntime140.dll","vcruntime140_1.dll")) {
+    $src = Join-Path $buildDir $dll
+    if (Test-Path $src) {
+        Copy-Item $src (Join-Path $pkgDir $dll)
+        Write-Host "  OK  $dll"
+    }
+}
+
+# === KB2670838 ===
+Write-Host "[4/6] Prerequisites..." -ForegroundColor Yellow
+if ($IncludePrereqMsu) {
+    $msuSrc = "..\..\release\files\prerequisite\KB2670838-x64.msu"
+    $msuDest = Join-Path $prereqDir "KB2670838-x64.msu"
+    if (Test-Path $msuSrc) {
+        Copy-Item $msuSrc $msuDest
+        Write-Host "  OK  KB2670838-x64.msu"
+    } else {
+        Write-Warning "  KB2670838-x64.msu not found at $msuSrc - skipping"
+    }
+}
+
+# === WebView2 Runtime ===
+if ($IncludeWebview2) {
+    Write-Host "[5/6] WebView2 Runtime..." -ForegroundColor Yellow
+    $wv2Src = "..\..\release\files\MicrosoftEdgeWebview2Setup.exe"
+    $wv2Dest = Join-Path $prereqDir "MicrosoftEdgeWebview2Setup.exe"
+    if (Test-Path $wv2Src) {
+        Copy-Item $wv2Src $wv2Dest
+        Write-Host "  OK  WebView2 Runtime"
+    } else {
+        Write-Warning "  WebView2 installer not found - skipping"
+    }
+} else {
+    Write-Host "[5/6] WebView2: skipped (use -IncludeWebview2 to bundle)" -ForegroundColor DarkGray
+}
+
+# === Documentation ===
+Write-Host "[6/6] Copying README..." -ForegroundColor Yellow
+$readmeDest = Join-Path $pkgDir "README-Win7.txt"
+@"
+Kelivo Win7 Release v${Version}
+================================
+
+Platform: Windows 7 SP1 x64 (+ KB2670838 required)
+Engine:   Flutter 3.44.1 (Win7-patched fork)
+Baseline: Kelivo v1.1.17+61 (commit c8c9ff37)
+
+SYSTEM REQUIREMENTS
+-------------------
+- Windows 7 SP1 x64
+- KB2670838 Platform Update
+- Visual C++ 2015-2022 Redistributable (x64)
+- 4 GB RAM minimum
+- GPU with DX11 support (WDDM 1.1+)
+
+INSTALLATION
+------------
+1. Run install_prereq.bat (automatic dependency check)
+2. Run kelivo.exe
+
+NOTES
+-----
+- WebView features are not available on Windows 7.
+  Embedded browser content may fall back to text display.
+- Toast notifications not available; use system tray.
+- Material You dynamic color is not available on Windows 7;
+  the app uses default color theme.
+
+For more information see:
+  https://github.com/kelivo-win7/kelivo
+
+SHA256: (see SHA256SUMS.txt if included)
+"@ | Out-File -FilePath $readmeDest -Encoding utf8
+Write-Host "  OK  README-Win7.txt"
+
+# === Include the setup script ===
+$setupScript = "..\..\release\scripts\install_prereq.bat"
+if (Test-Path $setupScript) {
+    Copy-Item $setupScript (Join-Path $pkgDir "install_prereq.bat")
+    Write-Host "  OK  install_prereq.bat"
+}
+
+# === SHA256SUMS ===
+$shaFile = Join-Path $pkgDir "SHA256SUMS.txt"
+Get-ChildItem $pkgDir -Recurse -File | ForEach-Object {
+    $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+    $relPath = $_.FullName.Substring($pkgDir.Length + 1)
+    "$hash  $relPath"
+} | Out-File -FilePath $shaFile -Encoding utf8
+Write-Host "  OK  SHA256SUMS.txt"
+
+# === Zip ===
+if (-not $NoZip) {
+    $zipFile = Join-Path $OutDir "kelivo-win7-x64-v${Version}.zip"
+    if (Test-Path $zipFile) { Remove-Item $zipFile -Force }
+    Compress-Archive -Path (Join-Path $pkgDir "*") -DestinationPath $zipFile -CompressionLevel Optimal
+    $zipSize = (Get-Item $zipFile).Length / 1MB
+    Write-Host ""
+    Write-Host "PACKAGE READY" -ForegroundColor Green
+    Write-Host "  Zip:  $zipFile"
+    Write-Host "  Size: $([math]::Round($zipSize, 1)) MB"
+    Write-Host "  Dir:  $pkgDir"
+} else {
+    Write-Host ""
+    Write-Host "STAGING DIRECTORY READY (--NoZip active): $pkgDir" -ForegroundColor Green
+}

@@ -1,0 +1,137 @@
+# =====================================================
+# Flutter Engine Windows x64 Release (Win7-compatible)
+# =====================================================
+# Builds a patched Flutter 3.44.1 engine with Win7 support.
+# Based on rustdesk/engine CI workflow pattern.
+#
+# Triggers:
+#   - Push to engine_patches/ or this file
+#   - Manual workflow_dispatch
+#   - Weekly rebuild (Mon 03:00 UTC)
+#
+# Runner requirements:
+#   windows-2022; >=16GB RAM; ~80GB free disk
+# =====================================================
+
+name: flutter-engine-win7-x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      flutter_ref:
+        description: "Flutter engine ref/tag to build"
+        required: true
+        default: "3.44.1"
+      dart_ref:
+        description: "Dart SDK ref/tag to build"
+        required: true
+        default: "dart-3.12.1"
+  push:
+    paths:
+      - "engine_patches/**"
+      - ".github/workflows/flutter-engine-windows-x64-release-build.yml"
+  schedule:
+    - cron: "0 3 * * 1"
+
+env:
+  FLUTTER_REF: ${{ github.event.inputs.flutter_ref || '3.44.1' }}
+  DART_REF: ${{ github.event.inputs.dart_ref || 'dart-3.12.1' }}
+  DEPOT_TOOLS_PATH: C:\depot_tools
+  ENGINE_SRC: C:\engine\src
+  ARTIFACT_NAME: flutter-engine-win7-x64
+
+jobs:
+  build-engine:
+    runs-on: windows-2022
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout kelivo-win7 config
+        uses: actions/checkout@v4
+        with:
+          path: kelivo-win7
+
+      - name: Install depot_tools
+        run: |
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git "$env:DEPOT_TOOLS_PATH"
+          echo "$env:DEPOT_TOOLS_PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: Fetch Flutter engine sources
+        run: |
+          mkdir C:\engine -Force
+          cd C:\engine
+          # fetch --no-history --nohooks flutter  (takes ~15 min)
+          fetch --no-history --nohooks flutter
+          cd src\flutter
+          git fetch --tags origin
+          git checkout "$env:FLUTTER_REF"
+          cd ..\dart
+          git fetch --tags origin
+          git checkout "$env:DART_REF"
+          cd ..
+          gclient sync --with_branch_heads --with_tags -D --jobs=4
+          gclient runhooks
+        shell: pwsh
+        timeout-minutes: 60
+
+      - name: Apply Win7 compatibility patches
+        run: |
+          # Use the checked-out patch files
+          python kelivo-win7/tools/apply_patches.py --engine-dir C:\engine\src
+        shell: cmd
+
+      - name: Configure GN (release, Impeller OFF, ANGLE)
+        run: |
+          cd C:\engine\src\flutter
+          flutter tools\gn `
+            --runtime-mode release `
+            --target-os windows `
+            --windows-cpu x64 `
+            --no-enable-impeller `
+            --no-lto `
+            --no-goma
+        shell: pwsh
+
+      - name: Build flutter_windows.dll + flutter_exe
+        run: |
+          cd C:\engine\src\flutter
+          ninja -C out\windows_release_x64 flutter_windows.dll flutter_exe
+        shell: cmd
+        timeout-minutes: 120
+
+      - name: Sanity check — build a smoke test Flutter app
+        run: |
+          flutter create --platforms=windows ci_smoke
+          cd ci_smoke
+
+          # Point to local engine
+          flutter config --enable-windows-desktop
+          flutter config --local-engine-src-path C:\engine\src
+          flutter config --local-engine windows_release_x64
+
+          flutter build windows --release
+          echo "=== Sanity check: run --version ==="
+          .\build\windows\runner\Release\ci_smoke.exe --version
+        shell: pwsh
+        timeout-minutes: 30
+
+      - name: Upload engine artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}-${{ env.FLUTTER_REF }}-${{ github.sha }}
+          path: |
+            C:\engine\src\out\windows_release_x64\flutter_windows.dll
+            C:\engine\src\out\windows_release_x64\icudtl.dat
+            C:\engine\src\out\windows_release_x64\flutter_exe.exe
+          retention-days: 30
+
+      - name: Upload impeller check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            C:\engine\src\out\windows_release_x64\**\*.log
+            C:\engine\src\flutter\out\windows_release_x64\**\*.ninja_log
+          retention-days: 7
