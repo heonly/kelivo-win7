@@ -26,9 +26,15 @@ on:
         description: "Dart SDK ref/tag to build"
         required: true
         default: "dart-3.12.1"
+      kelivo_ref:
+        description: "Kelivo commit/ref to build"
+        required: true
+        default: "c8c9ff37"
   push:
     paths:
       - "engine_patches/**"
+      - "windows_overrides/**"
+      - "dart_overrides/**"
       - ".github/workflows/flutter-engine-windows-x64-release-build.yml"
   schedule:
     - cron: "0 3 * * 1"
@@ -36,6 +42,7 @@ on:
 env:
   FLUTTER_REF: ${{ github.event.inputs.flutter_ref || '3.44.1' }}
   DART_REF: ${{ github.event.inputs.dart_ref || 'dart-3.12.1' }}
+  KELIVO_REF: ${{ github.event.inputs.kelivo_ref || 'c8c9ff37' }}
   DEPOT_TOOLS_PATH: C:\depot_tools
   ENGINE_SRC: C:\engine\src
   ARTIFACT_NAME: flutter-engine-win7-x64
@@ -116,17 +123,75 @@ jobs:
         shell: pwsh
         timeout-minutes: 30
 
-      - name: Upload engine artifacts
+      # ===== Kelivo Build =====
+      - name: Clone Kelivo source
+        run: |
+          git clone https://github.com/Chevey339/kelivo.git C:\kelivo
+          cd C:\kelivo
+          git checkout "$env:KELIVO_REF"
+        shell: cmd
+        timeout-minutes: 10
+
+      - name: Apply Kelivo Win7 overrides
+        run: |
+          # windows runner overrides
+          copy /Y kelivo-win7\windows_overrides\runner.exe.manifest C:\kelivo\windows\runner\
+          copy /Y kelivo-win7\windows_overrides\main.cpp C:\kelivo\windows\runner\
+          copy /Y kelivo-win7\windows_overrides\utils.h C:\kelivo\windows\runner\
+          copy /Y kelivo-win7\windows_overrides\utils.cc C:\kelivo\windows\runner\
+
+          # dependency overrides
+          copy /Y kelivo-win7\dart_overrides\pubspec.win7.yaml C:\kelivo\pubspec.win7.yaml
+        shell: cmd
+
+      - name: Remove unused deps from Kelivo pubspec
+        run: |
+          cd C:\kelivo
+          powershell -Command "(Get-Content pubspec.yaml) -replace '^\s+bitsdojo_window:.*\n','' -replace '^\s+desktop_drop:.*\n','' | Set-Content pubspec.yaml"
+        shell: cmd
+
+      - name: Flutter pub get (Kelivo)
+        run: |
+          cd C:\kelivo
+          flutter pub get
+        shell: cmd
+        timeout-minutes: 10
+
+      - name: Build Kelivo Windows release
+        run: |
+          cd C:\kelivo
+          flutter build windows --release
+        shell: cmd
+        timeout-minutes: 60
+
+      # ===== Packaging =====
+      - name: Package complete Win7 release
+        run: |
+          powershell -ExecutionPolicy Bypass -File kelivo-win7\release\scripts\package-win7.ps1 `
+            -BuildDir C:\kelivo\build\windows\runner\Release `
+            -Version $env:FLUTTER_REF-win7-${{ github.sha }} `
+            -OutDir C:\release `
+            -NoZip
+        shell: pwsh
+
+      - name: Upload full Win7 release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kelivo-win7-x64-${{ env.FLUTTER_REF }}
+          path: |
+            C:\release\kelivo-win7-x64-v${{ env.FLUTTER_REF }}-win7-*/
+          retention-days: 30
+
+      - name: Upload engine DLL (standalone)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}-${{ env.FLUTTER_REF }}-${{ github.sha }}
           path: |
             C:\engine\src\out\windows_release_x64\flutter_windows.dll
             C:\engine\src\out\windows_release_x64\icudtl.dat
-            C:\engine\src\out\windows_release_x64\flutter_exe.exe
           retention-days: 30
 
-      - name: Upload impeller check log
+      - name: Upload build logs (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -134,4 +199,5 @@ jobs:
           path: |
             C:\engine\src\out\windows_release_x64\**\*.log
             C:\engine\src\flutter\out\windows_release_x64\**\*.ninja_log
+            C:\kelivo\build\windows\**\*.log
           retention-days: 7
